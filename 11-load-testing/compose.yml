@@ -1,0 +1,349 @@
+# Stage objective:
+# Add repeatable load testing with k6.
+# The stack keeps proxy, security, logging, backups, monitoring, alerting, image tags, and DB failover.
+
+name: task03_stage11_loadtest
+
+services:
+  traefik:
+    image: traefik:v3.1
+    command:
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--providers.file.watch=true"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.forwardedheaders.insecure=true"
+      - "--entrypoints.websecure.forwardedheaders.insecure=true"
+      - "--entrypoints.metrics.address=:8082"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-ops@example.com}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+      - "--metrics.prometheus=true"
+      - "--metrics.prometheus.entrypoint=metrics"
+      - "--log.level=INFO"
+      - "--accesslog=true"
+    ports:
+      - "8080:80"
+      - "8443:443"
+      - "8081:8080"
+    volumes:
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - ./certs:/certs:ro
+      - letsencrypt:/letsencrypt
+    networks:
+      public:
+        aliases:
+          # Lets the k6 container call https://api.localhost through Traefik.
+          - api.localhost
+          - app.localhost
+      private:
+
+  front:
+    build:
+      context: ./front
+    image: front:v2
+    networks:
+      - public
+
+  api:
+    build:
+      context: ./api
+    image: api:v2
+    environment:
+      INSTANCE_NAME: stage11-api
+      MYSQL_HOST: db-proxy
+      MYSQL_PORT: "3306"
+      MYSQL_DATABASE: appdb
+      MYSQL_USER: appuser
+      MYSQL_PASSWORD: apppass
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      CACHE_ENABLED: "true"
+      CACHE_TTL_SECONDS: "30"
+    depends_on:
+      db-proxy:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8000/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks:
+      - private
+
+  auth:
+    build:
+      context: ./api
+    image: api:v2
+    environment:
+      INSTANCE_NAME: stage11-auth
+      API_KEY: ${API_KEY:-intern-secret-key}
+      BLOCKED_IPS: "203.0.113.10,198.51.100.7"
+      CACHE_ENABLED: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8000/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks:
+      - private
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks:
+      - private
+
+  mysql-primary:
+    build:
+      context: ./db
+    image: db:v2
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: appdb
+      MYSQL_USER: appuser
+      MYSQL_PASSWORD: apppass
+    volumes:
+      - mysql_primary_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks:
+      - private
+
+  mysql-standby:
+    image: db:v2
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: appdb
+      MYSQL_USER: appuser
+      MYSQL_PASSWORD: apppass
+    volumes:
+      - mysql_standby_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks:
+      - private
+
+  db-proxy:
+    image: haproxy:2.9-alpine
+    ports:
+      # Local-only teaching port for demonstrating DB proxy failover from the laptop.
+      - "33060:3306"
+      - "8404:8404"
+    volumes:
+      - ./db-proxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on:
+      mysql-primary:
+        condition: service_healthy
+      mysql-standby:
+        condition: service_healthy
+    networks:
+      - private
+
+  backup:
+    image: mysql:8.4
+    command: ["sh", "/backup/backup-loop.sh"]
+    environment:
+      MYSQL_HOST: db-proxy
+      MYSQL_PORT: "3306"
+      MYSQL_DATABASE: appdb
+      MYSQL_USER: appuser
+      MYSQL_PASSWORD: apppass
+      # Short interval for lecture testing. Use a real cron schedule in production.
+      BACKUP_INTERVAL_SECONDS: "30"
+      INIT_BACKUP: "true"
+    volumes:
+      - ./backup/backup-loop.sh:/backup/backup-loop.sh:ro
+      - db_backups:/backups
+    depends_on:
+      db-proxy:
+        condition: service_started
+    networks:
+      - private
+
+  loki:
+    image: grafana/loki:2.9.8
+    command: ["-config.file=/etc/loki/loki-config.yml"]
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./observability/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    networks:
+      - ops
+
+  promtail:
+    image: grafana/promtail:2.9.8
+    command: ["-config.file=/etc/promtail/promtail-config.yml"]
+    user: "0:0"
+    volumes:
+      - ./observability/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    depends_on:
+      - loki
+    networks:
+      - ops
+
+  grafana:
+    image: grafana/grafana:10.4.5
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    ports:
+      - "3300:3000"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - loki
+    networks:
+      - ops
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      - alertmanager
+    networks:
+      - private
+      - ops
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    networks:
+      - ops
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    networks:
+      - ops
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    command:
+      - "--path.rootfs=/host"
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    networks:
+      - ops
+
+  mysqld-exporter:
+    image: prom/mysqld-exporter:v0.15.1
+    command: ["--config.my-cnf=/etc/mysql-exporter/.my.cnf"]
+    volumes:
+      - ./observability/mysql-exporter/.my.cnf:/etc/mysql-exporter/.my.cnf:ro
+    depends_on:
+      db-proxy:
+        condition: service_started
+    networks:
+      - private
+      - ops
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.62.0
+    environment:
+      REDIS_ADDR: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - private
+      - ops
+
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.25.0
+    command: ["--config.file=/etc/blackbox/blackbox.yml"]
+    ports:
+      - "9115:9115"
+    extra_hosts:
+      - "api.localhost:host-gateway"
+      - "app.localhost:host-gateway"
+    volumes:
+      - ./observability/blackbox/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+    networks:
+      - ops
+
+  k6:
+    image: grafana/k6:0.52.0
+    profiles: ["load-test"]
+    environment:
+      API_KEY: ${API_KEY:-intern-secret-key}
+      API_BASE_URL: https://api.localhost
+      K6_VUS: ${K6_VUS:-25}
+      K6_DURATION: ${K6_DURATION:-60s}
+    volumes:
+      - ./load-test:/scripts:ro
+    depends_on:
+      - traefik
+    networks:
+      - public
+
+networks:
+  public:
+    name: task03_stage11_public
+    driver: bridge
+  private:
+    name: task03_stage11_private
+    driver: bridge
+    internal: true
+  ops:
+    name: task03_stage11_ops
+    driver: bridge
+
+volumes:
+  mysql_primary_data:
+  mysql_standby_data:
+  redis_data:
+  letsencrypt:
+  loki_data:
+  grafana_data:
+  db_backups:
+  prometheus_data:
+  alertmanager_data:

@@ -1,0 +1,94 @@
+# Stage objective:
+# Split the stack into a public network and a private network.
+# Public network: Traefik proxy + static front-end.
+# Private network: API + MySQL. Traefik is the only bridge between both networks.
+
+name: task03_stage01_network
+
+services:
+  traefik:
+    image: traefik:v3.1
+    command:
+      # The file provider keeps routes explicit and easy to inspect during the lab.
+      # HTTP entrypoint for local lab access.
+      - "--entrypoints.web.address=:80"
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--providers.file.watch=true"
+      # Local dashboard. This is convenient for the lecture; protect it in real environments.
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+      - "--log.level=INFO"
+      - "--accesslog=true"
+    ports:
+      - "8080:80"
+      - "8081:8080"
+    volumes:
+      # Dynamic routing rules are mounted read-only into Traefik.
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+    networks:
+      - public
+      - private
+
+  front:
+    build:
+      context: ./front
+    image: task03/front:stage01
+    networks:
+      # The front-end is public-facing but still reached through Traefik.
+      - public
+
+  api:
+    build:
+      context: ./api
+    image: task03/api:stage01
+    environment:
+      INSTANCE_NAME: stage01-api
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_DATABASE: appdb
+      MYSQL_USER: appuser
+      MYSQL_PASSWORD: apppass
+      CACHE_ENABLED: "false"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8000/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks:
+      # The API has no host port and no public network membership.
+      - private
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: appdb
+      MYSQL_USER: appuser
+      MYSQL_PASSWORD: apppass
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks:
+      # Database is private-only.
+      - private
+
+networks:
+  public:
+    name: task03_stage01_public
+    driver: bridge
+  private:
+    name: task03_stage01_private
+    driver: bridge
+    # Internal prevents direct host/internet routing from sensitive services.
+    internal: true
+
+volumes:
+  mysql_data:

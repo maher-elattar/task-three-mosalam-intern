@@ -1,0 +1,49 @@
+# Active HTTPS routes for load testing.
+# Rate limits are higher here so k6 can exercise the full stack.
+
+http:
+  routers:
+    frontend:
+      rule: Host(`app.localhost`)
+      entryPoints: [websecure]
+      service: frontend
+      tls: {}
+    api:
+      rule: Host(`api.localhost`)
+      entryPoints: [websecure]
+      service: api
+      middlewares:
+        - api-key-auth
+        - api-rate-limit
+        - api-security-headers
+      tls: {}
+
+  middlewares:
+    api-key-auth:
+      forwardAuth:
+        address: http://auth:8000/auth
+        trustForwardHeader: true
+        authResponseHeaders:
+          - X-Authenticated-By
+    api-rate-limit:
+      rateLimit:
+        average: 100
+        period: 1s
+        burst: 200
+    api-security-headers:
+      headers:
+        contentTypeNosniff: true
+        browserXssFilter: true
+        stsSeconds: 31536000
+
+  services:
+    frontend:
+      loadBalancer:
+        servers:
+          - url: http://front:80
+    api:
+      loadBalancer:
+        servers:
+          - url: http://task03_stage11_loadtest-api-1:8000
+          - url: http://task03_stage11_loadtest-api-2:8000
+

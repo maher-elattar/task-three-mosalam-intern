@@ -1,0 +1,7 @@
+# Production overlay for real domains.
+# It mounts routes.acme.yml over routes.yml so routers use the letsencrypt certResolver.
+
+services:
+  traefik:
+    volumes:
+      - ./traefik/dynamic/routes.acme.yml:/etc/traefik/dynamic/routes.yml:ro

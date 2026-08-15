@@ -1,0 +1,117 @@
+# Stage objective:
+# Replace plain HTTP proxying with HTTPS through Traefik.
+# Local mode uses a self-signed certificate.
+# Production mode enables ACME by adding compose.acme.yml and real domains.
+
+name: task03_stage04_ssl
+
+services:
+  traefik:
+    image: traefik:v3.1
+    command:
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--providers.file.watch=true"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      # ACME resolver is configured here. Routers use it only when compose.acme.yml is added.
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-ops@example.com}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+      - "--log.level=INFO"
+      - "--accesslog=true"
+    ports:
+      - "8080:80"
+      - "8443:443"
+      - "8081:8080"
+    volumes:
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - ./certs:/certs:ro
+      - letsencrypt:/letsencrypt
+    networks:
+      - public
+      - private
+
+  front:
+    build:
+      context: ./front
+    image: task03/front:stage04
+    networks:
+      - public
+
+  api:
+    build:
+      context: ./api
+    image: task03/api:stage04
+    environment:
+      INSTANCE_NAME: stage04-api
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_DATABASE: appdb
+      MYSQL_USER: appuser
+      MYSQL_PASSWORD: apppass
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      CACHE_ENABLED: "true"
+      CACHE_TTL_SECONDS: "30"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8000/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks:
+      - private
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks:
+      - private
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: appdb
+      MYSQL_USER: appuser
+      MYSQL_PASSWORD: apppass
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks:
+      - private
+
+networks:
+  public:
+    name: task03_stage04_public
+    driver: bridge
+  private:
+    name: task03_stage04_private
+    driver: bridge
+    internal: true
+
+volumes:
+  mysql_data:
+  redis_data:
+  letsencrypt:

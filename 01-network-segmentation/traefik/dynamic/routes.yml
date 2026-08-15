@@ -1,0 +1,24 @@
+# Active Traefik routes for local testing.
+# File provider is used because this Docker daemon rejects Traefik's Docker API client.
+
+http:
+  routers:
+    frontend:
+      rule: Host(`app.localhost`)
+      entryPoints: [web]
+      service: frontend
+    api:
+      rule: Host(`api.localhost`)
+      entryPoints: [web]
+      service: api
+
+  services:
+    frontend:
+      loadBalancer:
+        servers:
+          - url: http://front:80
+    api:
+      loadBalancer:
+        servers:
+          - url: http://api:8000
+

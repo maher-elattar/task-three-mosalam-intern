@@ -1,0 +1,51 @@
+# Alert rules for the production-like lab.
+# Some thresholds are intentionally low so interns can trigger alerts during a lecture.
+
+groups:
+  - name: production_like_lab
+    rules:
+      - alert: ApiP95LatencyHigh
+        expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job="api"}[1m])) by (le)) > 0.5
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "API p95 latency is high"
+          description: "p95 API latency has been above 500ms for 30 seconds."
+
+      - alert: DatabaseConnectionsHigh
+        expr: mysql_global_status_threads_connected > 20
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "MySQL connection count is high"
+          description: "MySQL has more than 20 active connections."
+
+      - alert: ScrapeTargetDown
+        expr: up == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "A monitored target is down"
+          description: "{{ $labels.job }} target {{ $labels.instance }} is down."
+
+      - alert: HostMemoryAlmostFull
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.15
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Host memory is almost full"
+          description: "Available memory is below 15%."
+
+      - alert: SslCertificateExpiresSoon
+        expr: probe_ssl_earliest_cert_expiry{job="blackbox-ssl"} - time() < 3888000
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "TLS certificate expires soon"
+          description: "The API TLS certificate expires in less than 45 days."
+
