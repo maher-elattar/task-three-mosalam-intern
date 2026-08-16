@@ -24,14 +24,24 @@ curl -fsS http://localhost:3300/api/health | grep -q "ok"
 echo "Checking Prometheus readiness..."
 curl -fsS http://localhost:9090/-/ready >/dev/null
 
+echo "Checking Prometheus target coverage..."
+targets="$(curl -fsS http://localhost:9090/api/v1/targets)"
+for job in prometheus traefik api mysql redis cadvisor node blackbox-ssl; do
+  echo "$targets" | grep -q "\"job\":\"$job\""
+done
+echo "$targets" | grep -q '"health":"up"'
+
 echo "Checking Alertmanager readiness..."
 curl -fsS http://localhost:9093/-/ready >/dev/null
+curl -fsS http://localhost:9093/api/v2/status | grep -q "uptime"
 
 echo "Checking blackbox HTTPS probe..."
 curl -fsS "http://localhost:9115/probe?module=https_2xx_insecure&target=https://api.localhost:8443/api/items" | grep -q "probe_ssl_earliest_cert_expiry"
 
 echo "Checking alert rules are loaded..."
 curl -fsS http://localhost:9090/api/v1/rules | grep -q "ApiP95LatencyHigh"
+curl -fsS http://localhost:9090/api/v1/rules | grep -q "DatabaseConnectionsHigh"
+curl -fsS http://localhost:9090/api/v1/rules | grep -q "SslCertificateExpiresSoon"
 
 echo "Waiting briefly for Promtail to ship logs..."
 sleep 8
@@ -39,5 +49,8 @@ sleep 8
 echo "Checking Loki labels include the Compose project..."
 curl -fsS -G http://localhost:3100/loki/api/v1/series \
   --data-urlencode 'match[]={project="task03_stage08_alerting"}' | grep -q "task03_stage08_alerting"
+
+echo "Checking ACME overlay renders valid Compose config..."
+docker compose -f compose.yml -f compose.acme.yml config -q
 
 echo "Stage 08 checks passed."

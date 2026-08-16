@@ -18,6 +18,9 @@ curl -fsS http://localhost:3100/ready >/dev/null
 echo "Checking Grafana health..."
 curl -fsS http://localhost:3300/api/health | grep -q "ok"
 
+echo "Checking Grafana Loki datasource provisioning..."
+curl -fsS http://localhost:3300/api/datasources | grep -q "Loki"
+
 echo "Waiting briefly for Promtail to ship logs..."
 sleep 8
 
@@ -25,5 +28,12 @@ echo "Checking Loki labels include the Compose project..."
 curl -fsS -G http://localhost:3100/loki/api/v1/series \
   --data-urlencode 'match[]={project="task03_stage06_logging"}' | grep -q "task03_stage06_logging"
 
-echo "Stage 06 checks passed."
+echo "Checking Loki returns log streams for this project..."
+curl -fsS -G http://localhost:3100/loki/api/v1/query_range \
+  --data-urlencode 'query={project="task03_stage06_logging"}' \
+  --data-urlencode 'limit=10' | grep -q '"resultType":"streams"'
 
+echo "Checking ACME overlay renders valid Compose config..."
+docker compose -f compose.yml -f compose.acme.yml config -q
+
+echo "Stage 06 checks passed."

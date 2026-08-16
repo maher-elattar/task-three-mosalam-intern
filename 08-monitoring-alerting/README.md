@@ -18,51 +18,128 @@ Alerts included:
 - Host memory almost full.
 - TLS certificate expires soon.
 
+## Current architecture
+
+```mermaid
+flowchart LR
+  user[Client] --> traefik[Traefik HTTPS + security]
+  traefik --> api1[API replica 1]
+  traefik --> api2[API replica 2]
+  api1 --> redis[(Redis)]
+  api2 --> redis
+  api1 --> mysql[(MySQL)]
+  api2 --> mysql
+  backup[Backup worker] --> mysql
+  backup --> backups[(db_backups volume)]
+
+  subgraph observability[observability stack]
+    prom[Prometheus]
+    alertmanager[Alertmanager]
+    grafana[Grafana]
+    loki[(Loki)]
+    promtail[Promtail]
+    blackbox[Blackbox exporter]
+    mysqld[Mysqld exporter]
+    redisexp[Redis exporter]
+    cadvisor[cAdvisor]
+    node[Node exporter]
+  end
+
+  promtail --> loki
+  grafana --> loki
+  grafana --> prom
+  prom --> alertmanager
+  prom --> traefik
+  prom --> api1
+  prom --> api2
+  prom --> mysqld
+  prom --> redisexp
+  prom --> cadvisor
+  prom --> node
+  prom --> blackbox
+```
+
+## What this proves
+
+- Metrics and logs are separate but both visible in Grafana.
+- Prometheus knows every key component as a target.
+- Alert rules are loaded for API latency, DB load, target health, memory pressure, and TLS expiry.
+- HTTPS certificate probing works through blackbox exporter.
+
 ## Run
 
 ```bash
 ./scripts/generate-local-certs.sh
-docker compose up -d --build --scale api=2
+docker compose up -d --build --scale api=2 --wait
 ```
 
-## Test
+## Prove it
+
+Run the automated check:
 
 ```bash
 ./scripts/check.sh
 ```
 
-Manual backup check:
+Manual monitoring proof:
 
 ```bash
-docker compose exec backup ls -lh /backups
-```
+# Prometheus and Alertmanager readiness.
+curl http://localhost:9090/-/ready
+curl http://localhost:9093/-/ready
 
-Manual logging check:
+# Inspect scrape targets.
+curl http://localhost:9090/api/v1/targets
 
-```bash
-curl -k -H 'Host: api.localhost' -H 'X-API-Key: intern-secret-key' https://localhost:8443/api/items
-curl -G http://localhost:3100/loki/api/v1/series \
-  --data-urlencode 'match[]={project="task03_stage08_alerting"}'
-```
+# Confirm alert rules are loaded.
+curl http://localhost:9090/api/v1/rules | grep ApiP95LatencyHigh
+curl http://localhost:9090/api/v1/rules | grep DatabaseConnectionsHigh
+curl http://localhost:9090/api/v1/rules | grep SslCertificateExpiresSoon
 
-Prometheus and Alertmanager:
-
-```bash
-open http://localhost:9090
-open http://localhost:9093
+# Probe HTTPS certificate expiry through blackbox exporter.
+curl 'http://localhost:9115/probe?module=https_2xx_insecure&target=https://api.localhost:8443/api/items' | grep probe_ssl_earliest_cert_expiry
 ```
 
 Trigger the API latency alert:
 
 ```bash
-for i in {1..40}; do
+for i in $(seq 1 40); do
   curl -k -H 'Host: api.localhost' \
     -H 'X-API-Key: intern-secret-key' \
     'https://localhost:8443/api/slow?delay_ms=900'
 done
 ```
 
-Grafana is available at `http://localhost:3300`.
+Manual backup and logging proof:
+
+```bash
+docker compose exec backup ls -lh /backups
+curl -G http://localhost:3100/loki/api/v1/series \
+  --data-urlencode 'match[]={project="task03_stage08_alerting"}'
+```
+
+Open dashboards:
+
+```bash
+open http://localhost:9090
+open http://localhost:9093
+open http://localhost:3300
+```
+
+## Next stage preview
+
+```mermaid
+flowchart LR
+  source[Source change] --> build[Build images]
+  build --> front[front:v2]
+  build --> api[api:v2]
+  build --> db[db:v2]
+  front --> compose[Compose deployment]
+  api --> compose
+  db --> compose
+```
+
+Stage 09 keeps the operational stack and adds explicit image versioning for the custom front-end, API, and database seed image.
 
 ## Stop
 
