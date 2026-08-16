@@ -1,36 +1,91 @@
 # 03 - Backend load balancing
 
-This stage keeps Redis and MySQL, then runs two API replicas behind Traefik.
+This stage runs two API replicas behind Traefik.
 
-Traefik routes to both scaled API containers from `traefik/dynamic/routes.yml`. The `--scale api=2` command creates the two expected container targets.
+- Redis and MySQL remain private.
+- Traefik forwards API traffic to both API containers.
+- Each API response includes the container `hostname`, so distribution is visible.
+- The Compose project name is fixed, so the file-provider upstream names are deterministic for the lab.
+
+## Current architecture
+
+```mermaid
+flowchart LR
+  user[Client] -->|Host: api.localhost| traefik[Traefik]
+
+  subgraph public[public network]
+    traefik
+    front[Front-end]
+  end
+
+  subgraph private[private network]
+    api1[API replica 1]
+    api2[API replica 2]
+    redis[(Redis)]
+    mysql[(MySQL)]
+  end
+
+  traefik --> front
+  traefik --> api1
+  traefik --> api2
+  api1 --> redis
+  api2 --> redis
+  api1 --> mysql
+  api2 --> mysql
+```
+
+## What this proves
+
+- The API can be horizontally scaled with `--scale api=2`.
+- Traefik distributes requests across both API replicas.
+- Stateful dependencies stay private and shared.
 
 ## Run
 
 ```bash
-docker compose up -d --build --scale api=2
+docker compose up -d --build --scale api=2 --wait
 ```
 
-## Test
+## Prove it
+
+Run the automated check:
 
 ```bash
 ./scripts/check.sh
 ```
 
-Manual check:
+Manual load-balancing proof:
 
 ```bash
-for i in {1..10}; do
-  curl -H 'Host: api.localhost' http://localhost:8080/api/items
-done
-```
+# Confirm two API containers exist.
+docker compose ps api
 
-Look at the `hostname` value in responses. It should alternate between the two API containers over multiple requests.
+# Send repeated requests and compare the hostname values.
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  curl -s -H 'Host: api.localhost' http://localhost:8080/api/items | sed -n 's/.*"hostname":"\([^"]*\)".*/\1/p'
+done
+
+# Traefik should expose the file-provider API service.
+curl http://localhost:8081/api/http/services | grep api@file
+```
 
 Dashboard:
 
 ```bash
 open http://localhost:8081/dashboard/
 ```
+
+## Next stage preview
+
+```mermaid
+flowchart LR
+  user[Client] -->|HTTPS| traefik[Traefik TLS proxy]
+  traefik --> api1[API replica 1]
+  traefik --> api2[API replica 2]
+  traefik -. "ACME / local cert" .-> cert[(Certificate storage)]
+```
+
+Stage 04 upgrades the proxy to HTTPS, adds local TLS for the laptop, and includes an ACME overlay for real domains.
 
 ## Stop
 

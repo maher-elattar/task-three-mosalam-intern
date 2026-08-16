@@ -11,28 +11,77 @@ Local laptop mode:
 Production domain mode:
 
 - Traefik has an ACME resolver named `letsencrypt`.
-- Add `compose.acme.yml` to attach that resolver to the routers.
-- Traefik stores ACME state in the `letsencrypt` volume and renews certificates automatically.
+- `compose.acme.yml` mounts the ACME route file over the local route file.
+- ACME state is stored in the `letsencrypt` volume, which lets Traefik renew certificates automatically.
+
+## Current architecture
+
+```mermaid
+flowchart LR
+  user[Client] -->|HTTP :8080| redirect[HTTP to HTTPS redirect]
+  user -->|HTTPS :8443| traefik[Traefik TLS proxy]
+  redirect --> traefik
+
+  subgraph public[public network]
+    traefik
+    front[Front-end]
+  end
+
+  subgraph private[private network]
+    api1[API replica 1]
+    api2[API replica 2]
+    redis[(Redis)]
+    mysql[(MySQL)]
+  end
+
+  certs[(local certs or ACME volume)] --> traefik
+  traefik --> front
+  traefik --> api1
+  traefik --> api2
+  api1 --> redis
+  api2 --> redis
+  api1 --> mysql
+  api2 --> mysql
+```
+
+## What this proves
+
+- Web and API traffic can be terminated at a TLS-enabled proxy.
+- HTTP requests are redirected to HTTPS.
+- The same stack supports local self-signed certificates and production ACME routing.
 
 ## Run locally
 
 ```bash
 ./scripts/generate-local-certs.sh
-docker compose up -d --build --scale api=2
+docker compose up -d --build --scale api=2 --wait
 ```
 
-## Test locally
+## Prove it locally
+
+Run the automated check:
 
 ```bash
 ./scripts/check.sh
 ```
 
-Manual checks:
+Manual TLS proof:
 
 ```bash
+# Front-end over HTTPS.
 curl -k -H 'Host: app.localhost' https://localhost:8443/
+
+# API over HTTPS.
 curl -k -H 'Host: api.localhost' https://localhost:8443/api/items
-open http://localhost:8081/dashboard/
+
+# HTTP should redirect to HTTPS.
+curl -i -H 'Host: app.localhost' http://localhost:8080/
+
+# Inspect the local certificate subject.
+openssl x509 -in certs/local.crt -noout -subject -issuer -dates
+
+# The ACME overlay must render as valid Compose config.
+docker compose -f compose.yml -f compose.acme.yml config -q
 ```
 
 ## Production ACME example
@@ -45,6 +94,19 @@ docker compose -f compose.yml -f compose.acme.yml up -d --build --scale api=2
 ```
 
 For real ACME HTTP-01 validation, public ports `80` and `443` must reach this Docker host.
+
+## Next stage preview
+
+```mermaid
+flowchart LR
+  user[Client] --> traefik[Traefik]
+  traefik --> auth[Forward-auth service]
+  auth -->|allow| api[API replicas]
+  auth -->|reject missing key or blocked IP| denied[401 / 403]
+  traefik -->|rate limit exceeded| limited[429]
+```
+
+Stage 05 keeps HTTPS and adds the proxy security layer: API key validation, IP blocking, rate limiting, and security headers.
 
 ## Stop
 
