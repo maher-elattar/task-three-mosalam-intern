@@ -4,6 +4,24 @@
 
 set -eu
 
+wait_for_traefik_docker_routes() {
+  attempt=0
+  while [ "$attempt" -lt 30 ]; do
+    if curl -fsS http://localhost:8081/api/http/routers 2>/dev/null | grep -q '"backend-api@docker"' \
+      && curl -fsS http://localhost:8081/api/http/routers 2>/dev/null | grep -q '"frontend@docker"'; then
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+
+  echo "Traefik did not load the expected Docker-discovered routers." >&2
+  curl -fsS http://localhost:8081/api/http/routers || true
+  exit 1
+}
+
+wait_for_traefik_docker_routes
+
 echo "Clearing cache..."
 curl -fsS -X POST -H "Host: api.localhost" http://localhost:8080/api/cache/clear >/dev/null
 
@@ -40,5 +58,9 @@ if echo "$redis_networks" | grep -q "task03_stage02_public"; then
   echo "Redis must stay off the public network." >&2
   exit 1
 fi
+
+echo "Checking Traefik Docker discovery..."
+curl -fsS http://localhost:8081/api/http/routers | grep -q '"backend-api@docker"'
+curl -fsS http://localhost:8081/api/http/routers | grep -q '"frontend@docker"'
 
 echo "Stage 02 checks passed."

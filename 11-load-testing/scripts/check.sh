@@ -3,8 +3,26 @@
 
 set -eu
 
+wait_for_traefik_docker_routes() {
+  attempt=0
+  while [ "$attempt" -lt 30 ]; do
+    if curl -fsS http://localhost:8081/api/http/routers 2>/dev/null | grep -q '"backend-api@docker"' \
+      && curl -fsS http://localhost:8081/api/http/routers 2>/dev/null | grep -q '"frontend@docker"'; then
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+
+  echo "Traefik did not load the expected Docker-discovered routers." >&2
+  curl -fsS http://localhost:8081/api/http/routers || true
+  exit 1
+}
+
+wait_for_traefik_docker_routes
+
 echo "Generating API logs..."
-curl -kfsS -H "Host: api.localhost" -H "X-API-Key: intern-secret-key" https://localhost:8443/api/items >/dev/null
+curl -kfsS -H "Host: api.localhost" -H "X-API-Key: lab-secret-key" https://localhost:8443/api/items >/dev/null
 
 echo "Checking that the backup worker created a timestamped dump..."
 docker compose exec -T backup sh -lc 'latest="$(ls -1 /backups/appdb-*.sql | tail -1)"; echo "$latest"; test -s "$latest"; grep -q "CREATE TABLE" "$latest"; grep -q "products" "$latest"'
@@ -18,7 +36,26 @@ docker compose --profile load-test config --services | grep -q '^k6$'
 
 echo "Checking API through the database proxy..."
 docker compose exec -T redis redis-cli DEL catalog:v1 >/dev/null
-curl -kfsS -H "Host: api.localhost" -H "X-API-Key: intern-secret-key" https://localhost:8443/api/items | grep -q "products"
+curl -kfsS -H "Host: api.localhost" -H "X-API-Key: lab-secret-key" https://localhost:8443/api/items | grep -q "products"
+
+echo "Checking primary-to-standby replication..."
+proof_name="replicated-failover-proof"
+docker compose exec -T mysql-primary mysql -uroot -prootpass appdb -e \
+  "INSERT INTO products (name, price) VALUES ('${proof_name}', 42.42);"
+for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+  replicated_count="$(
+    docker compose exec -T mysql-standby mysql -uroot -prootpass -N -B appdb -e \
+      "SELECT COUNT(*) FROM products WHERE name = '${proof_name}';" | tr -d '\r'
+  )"
+  if [ "${replicated_count}" -ge 1 ]; then
+    break
+  fi
+  sleep 2
+done
+if [ "${replicated_count}" -lt 1 ]; then
+  echo "Expected proof row to replicate to standby." >&2
+  exit 1
+fi
 
 echo "Checking HAProxy stats endpoint..."
 for attempt in 1 2 3 4 5 6 7 8 9 10; do
@@ -35,7 +72,7 @@ echo "Stopping primary MySQL to test failover..."
 docker compose stop mysql-primary >/dev/null
 sleep 12
 docker compose exec -T redis redis-cli DEL catalog:v1 >/dev/null
-curl -kfsS -H "Host: api.localhost" -H "X-API-Key: intern-secret-key" https://localhost:8443/api/items | grep -q "products"
+curl -kfsS -H "Host: api.localhost" -H "X-API-Key: lab-secret-key" https://localhost:8443/api/items | grep -q "${proof_name}"
 curl -fsS 'http://localhost:8404/stats;csv' >/tmp/stage11-haproxy.csv
 grep -q '^mysql,mysql-primary,.*DOWN' /tmp/stage11-haproxy.csv
 grep -q '^mysql,mysql-standby,.*UP' /tmp/stage11-haproxy.csv
@@ -86,5 +123,9 @@ docker compose -f compose.yml -f compose.acme.yml config -q
 
 echo "Running short k6 load test..."
 docker compose run --rm -e K6_VUS=10 -e K6_DURATION=15s k6 run /scripts/load-test.js
+
+echo "Checking Traefik Docker discovery..."
+curl -fsS http://localhost:8081/api/http/routers | grep -q '"backend-api@docker"'
+curl -fsS http://localhost:8081/api/http/routers | grep -q '"frontend@docker"'
 
 echo "Stage 11 checks passed."

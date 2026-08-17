@@ -3,7 +3,7 @@ import { check, sleep } from "k6";
 
 const vus = Number(__ENV.K6_VUS || 25);
 const duration = __ENV.K6_DURATION || "60s";
-const apiKey = __ENV.API_KEY || "intern-secret-key";
+const apiKey = __ENV.API_KEY || "lab-secret-key";
 const baseUrl = __ENV.API_BASE_URL || "https://api.localhost";
 
 export const options = {

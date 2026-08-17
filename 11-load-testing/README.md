@@ -7,7 +7,8 @@ Components:
 - k6 sends HTTPS traffic through Traefik.
 - The load test includes normal API reads, occasional cache clears, and occasional slow requests.
 - Prometheus, Alertmanager, Grafana, Loki, Traefik, API replicas, MySQL, Redis, and HAProxy can be watched during the run.
-- HAProxy local demo ports are bound to `127.0.0.1:33060` and `127.0.0.1:8404` through the non-public `ops` network.
+- MySQL primary changes replicate to the standby before HAProxy uses it as the failover target.
+- HAProxy local diagnostic ports are bound to `127.0.0.1:33060` and `127.0.0.1:8404` through the non-public `ops` network.
 
 Rate-limit note:
 
@@ -27,7 +28,8 @@ flowchart LR
   api1 --> dbproxy[HAProxy db-proxy]
   api2 --> dbproxy
   dbproxy --> primary[(mysql-primary<br/>db:v2)]
-  dbproxy -. failover .-> standby[(mysql-standby<br/>db:v2)]
+  primary -. "binlog replication" .-> standby[(mysql-standby<br/>db:v2)]
+  dbproxy -. failover .-> standby
 
   backup[Backup worker] --> dbproxy
 
@@ -52,6 +54,8 @@ flowchart LR
   prom --> blackbox
   prom --> cadvisor
   prom --> node
+  dockerproxy[Docker API proxy<br/>Docker labels]
+  traefik -. "Docker provider" .-> dockerproxy
 ```
 
 ## What this proves
@@ -59,7 +63,7 @@ flowchart LR
 - The full stack can be exercised under repeatable load.
 - Load passes through HTTPS, API key auth, rate limiting, and Traefik load balancing.
 - k6 thresholds verify that request failures and p95 latency stay inside the lab target.
-- Monitoring, alerting, logging, SSL probing, backups, Redis, and DB failover remain available during load.
+- Monitoring, alerting, logging, SSL probing, backups, Redis, replicated DB failover, and Traefik discovery remain available during load.
 
 ## Run
 
@@ -75,6 +79,13 @@ Run the automated check:
 ```bash
 ./scripts/check.sh
 ```
+Traefik discovery proof:
+
+```bash
+curl http://localhost:8081/api/http/routers | grep '@docker'
+docker compose exec traefik wget -q -O - http://docker-api-proxy:2375/v1.24/version
+```
+
 
 Manual load-test proof:
 
@@ -82,7 +93,7 @@ Manual load-test proof:
 # Default load test: 25 VUs for 60 seconds.
 docker compose run --rm k6 run /scripts/load-test.js
 
-# Short lecture run.
+# Short run.
 docker compose run --rm -e K6_VUS=10 -e K6_DURATION=15s k6 run /scripts/load-test.js
 
 # Heavier run for demonstration.
@@ -93,12 +104,17 @@ Manual failover proof:
 
 ```bash
 docker compose exec redis redis-cli DEL catalog:v1
-curl -k -H 'Host: api.localhost' -H 'X-API-Key: intern-secret-key' https://localhost:8443/api/items
+curl -k -H 'Host: api.localhost' -H 'X-API-Key: lab-secret-key' https://localhost:8443/api/items
+
+docker compose exec mysql-primary mysql -uroot -prootpass appdb -e \
+  "INSERT INTO products (name, price) VALUES ('manual-replication-proof', 42.42);"
+docker compose exec mysql-standby mysql -uroot -prootpass appdb -e \
+  "SELECT id, name, price FROM products WHERE name = 'manual-replication-proof';"
 
 docker compose stop mysql-primary
 sleep 12
 docker compose exec redis redis-cli DEL catalog:v1
-curl -k -H 'Host: api.localhost' -H 'X-API-Key: intern-secret-key' https://localhost:8443/api/items
+curl -k -H 'Host: api.localhost' -H 'X-API-Key: lab-secret-key' https://localhost:8443/api/items | grep manual-replication-proof
 curl 'http://localhost:8404/stats;csv' | grep '^mysql,mysql-'
 docker compose start mysql-primary
 ```
@@ -137,7 +153,7 @@ flowchart LR
   observability[Central observability + paging] --> deploy
 ```
 
-After this lab, the next production-grade steps would be CI-built immutable images, real DNS and ACME certificates, replicated database storage, off-host backup retention, secret management, and blue/green or canary deployment workflows.
+After this lab, the next production-grade steps would be CI-built immutable images, real DNS and ACME certificates, automatic database promotion for writes, off-host backup retention, secret management, and blue/green or canary deployment workflows.
 
 ## Stop
 

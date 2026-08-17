@@ -5,12 +5,12 @@ global:
   resolve_timeout: 1m
 
 route:
-  receiver: lecture-console
+  receiver: lab-console
   group_by: ["alertname", "job"]
   group_wait: 5s
   group_interval: 30s
   repeat_interval: 5m
 
 receivers:
-  - name: lecture-console
+  - name: lab-console
 

@@ -5,14 +5,15 @@ This stage adds simple database failover while keeping the previous security, lo
 Components:
 
 - `mysql-primary` is the normal database target.
-- `mysql-standby` is marked as the backup target.
+- `mysql-standby` receives primary changes through MySQL replication.
+- `mysql-replication` configures primary-to-standby replication before the proxy starts routing database traffic.
 - `db-proxy` uses HAProxy TCP checks and switches to standby when primary fails.
 - The API, backup worker, and MySQL exporter connect to `db-proxy`, not directly to a MySQL container.
-- `db-proxy` also joins the non-public `ops` network so Docker can publish local-only teaching ports on `127.0.0.1:33060` and `127.0.0.1:8404`.
+- `db-proxy` also joins the non-public `ops` network so Docker can publish local-only diagnostic ports on `127.0.0.1:33060` and `127.0.0.1:8404`.
 
-Important limitation:
+Scope:
 
-This is routing failover, not full database high availability. The two MySQL containers are seeded with the same schema, but there is no replication. A production design would use MySQL replication, InnoDB Cluster, Galera, or a managed database service.
+This stage demonstrates replicated read failover. It does not promote the standby for writes.
 
 ## Current architecture
 
@@ -30,20 +31,24 @@ flowchart LR
   mysqld[Mysqld exporter] --> dbproxy
 
   dbproxy -->|normal path| primary[(mysql-primary<br/>db:v2)]
-  dbproxy -. "backup path if primary is down" .-> standby[(mysql-standby<br/>db:v2)]
+  primary -. "binlog replication" .-> standby[(mysql-standby<br/>db:v2)]
+  dbproxy -. "backup path if primary is down" .-> standby
 
   ops[ops network<br/>local-only stats ports] --- dbproxy
   prom[Prometheus] --> mysqld
   grafana[Grafana] --> prom
   promtail[Promtail] --> loki[(Loki)]
+  dockerproxy[Docker API proxy<br/>Docker labels]
+  traefik -. "Docker provider" .-> dockerproxy
 ```
 
 ## What this proves
 
 - Database clients use a stable proxy endpoint instead of a specific MySQL container.
+- Writes made on `mysql-primary` are replicated to `mysql-standby`.
 - HAProxy marks the primary down and serves from standby when the primary stops.
-- API reads continue after primary failure when the cache is cleared.
-- HAProxy stats expose the primary and standby state for lecture demonstration.
+- API reads continue after primary failure and return data that was replicated before the failure.
+- HAProxy stats expose the primary and standby state for local inspection.
 
 ## Run
 
@@ -59,6 +64,13 @@ Run the automated check:
 ```bash
 ./scripts/check.sh
 ```
+Traefik discovery proof:
+
+```bash
+curl http://localhost:8081/api/http/routers | grep '@docker'
+docker compose exec traefik wget -q -O - http://docker-api-proxy:2375/v1.24/version
+```
+
 
 Manual failover proof:
 
@@ -69,8 +81,14 @@ curl 'http://localhost:8404/stats;csv' | grep '^mysql,mysql-'
 # Force a database read through the proxy.
 docker compose exec redis redis-cli DEL catalog:v1
 curl -k -H 'Host: api.localhost' \
-  -H 'X-API-Key: intern-secret-key' \
+  -H 'X-API-Key: lab-secret-key' \
   https://localhost:8443/api/items
+
+# Insert a proof row into primary and confirm it reaches standby.
+docker compose exec mysql-primary mysql -uroot -prootpass appdb -e \
+  "INSERT INTO products (name, price) VALUES ('manual-replication-proof', 42.42);"
+docker compose exec mysql-standby mysql -uroot -prootpass appdb -e \
+  "SELECT id, name, price FROM products WHERE name = 'manual-replication-proof';"
 
 # Stop primary and wait for HAProxy health checks.
 docker compose stop mysql-primary
@@ -79,8 +97,8 @@ sleep 12
 # Clear Redis so the API must read from MySQL through db-proxy.
 docker compose exec redis redis-cli DEL catalog:v1
 curl -k -H 'Host: api.localhost' \
-  -H 'X-API-Key: intern-secret-key' \
-  https://localhost:8443/api/items
+  -H 'X-API-Key: lab-secret-key' \
+  https://localhost:8443/api/items | grep manual-replication-proof
 
 # HAProxy should show primary DOWN and standby UP.
 curl 'http://localhost:8404/stats;csv' | grep '^mysql,mysql-'

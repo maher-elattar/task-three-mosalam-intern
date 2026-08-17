@@ -41,6 +41,8 @@ flowchart LR
   api2 --> redis
   api1 --> mysql
   api2 --> mysql
+  dockerproxy[Docker API proxy<br/>Docker labels]
+  traefik -. "Docker provider" .-> dockerproxy
 ```
 
 ## What this proves
@@ -64,6 +66,13 @@ Run the automated check:
 ```bash
 ./scripts/check.sh
 ```
+Traefik discovery proof:
+
+```bash
+curl http://localhost:8081/api/http/routers | grep '@docker'
+docker compose exec traefik wget -q -O - http://docker-api-proxy:2375/v1.24/version
+```
+
 
 Manual security proof:
 
@@ -73,25 +82,25 @@ curl -k -i -H 'Host: api.localhost' https://localhost:8443/api/items
 
 # Accepted: valid API key.
 curl -k -H 'Host: api.localhost' \
-  -H 'X-API-Key: intern-secret-key' \
+  -H 'X-API-Key: lab-secret-key' \
   https://localhost:8443/api/items
 
 # Rejected: blocked source IP demonstration.
 curl -k -i -H 'Host: api.localhost' \
-  -H 'X-API-Key: intern-secret-key' \
+  -H 'X-API-Key: lab-secret-key' \
   -H 'X-Forwarded-For: 203.0.113.10' \
   https://localhost:8443/api/items
 
 # Prove security headers are present.
 curl -k -I -H 'Host: api.localhost' \
-  -H 'X-API-Key: intern-secret-key' \
+  -H 'X-API-Key: lab-secret-key' \
   https://localhost:8443/api/items
 
 # Prove rate limiting by sending a burst.
 for i in $(seq 1 25); do
   curl -k -s -o /dev/null -w "%{http_code}\n" \
     -H 'Host: api.localhost' \
-    -H 'X-API-Key: intern-secret-key' \
+    -H 'X-API-Key: lab-secret-key' \
     https://localhost:8443/api/items
 done | sort | uniq -c
 

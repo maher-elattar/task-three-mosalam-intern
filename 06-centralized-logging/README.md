@@ -40,6 +40,8 @@ flowchart LR
   redis -. stdout logs .-> promtail
   promtail --> loki
   grafana --> loki
+  dockerproxy[Docker API proxy<br/>Docker labels]
+  traefik -. "Docker provider" .-> dockerproxy
 ```
 
 ## What this proves
@@ -62,13 +64,20 @@ Run the automated check:
 ```bash
 ./scripts/check.sh
 ```
+Traefik discovery proof:
+
+```bash
+curl http://localhost:8081/api/http/routers | grep '@docker'
+docker compose exec traefik wget -q -O - http://docker-api-proxy:2375/v1.24/version
+```
+
 
 Manual logging proof:
 
 ```bash
 # Generate API logs.
 curl -k -H 'Host: api.localhost' \
-  -H 'X-API-Key: intern-secret-key' \
+  -H 'X-API-Key: lab-secret-key' \
   https://localhost:8443/api/items
 
 # Loki should have a series for this Compose project.

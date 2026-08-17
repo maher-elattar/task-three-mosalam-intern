@@ -1,29 +1,43 @@
 # Stage objective:
 # Run two API containers and let Traefik load-balance between them.
-# Traefik routes to both API replicas from its dynamic file configuration.
+# Traefik discovers API replicas from Docker labels and load-balances them.
 
 name: task03_stage03_lb
 
 services:
   traefik:
-    image: traefik:v3.1
+    image: traefik:v3.5
     command:
-      - "--entrypoints.web.address=:80"
-      - "--providers.file.directory=/etc/traefik/dynamic"
-      - "--providers.file.watch=true"
-      - "--api.dashboard=true"
-      - "--api.insecure=true"
-      - "--log.level=INFO"
-      - "--accesslog=true"
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.endpoint=tcp://docker-api-proxy:2375
+      - --entrypoints.web.address=:80
+      - --api.dashboard=true
+      - --api.insecure=true
+      - --log.level=INFO
+      - --accesslog=true
     ports:
       - "8080:80"
       - "8081:8080"
-    volumes:
-      - ./traefik/dynamic:/etc/traefik/dynamic:ro
     networks:
       - public
       - private
 
+    depends_on:
+      docker-api-proxy:
+        condition: service_started
+      front:
+        condition: service_started
+      api:
+        condition: service_healthy
+  docker-api-proxy:
+    image: haproxy:2.9-alpine
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./docker-api-proxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      - private
+    user: 0:0
   front:
     build:
       context: ./front
@@ -31,6 +45,12 @@ services:
     networks:
       - public
 
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.frontend.rule=Host(`app.localhost`)
+      - traefik.http.routers.frontend.entrypoints=web
+      - traefik.http.services.frontend.loadbalancer.server.port=80
+      - traefik.docker.network=task03_stage03_public
   api:
     build:
       context: ./api
@@ -60,6 +80,13 @@ services:
     networks:
       - private
 
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.backend-api.rule=Host(`api.localhost`)
+      - traefik.http.routers.backend-api.entrypoints=web
+      - traefik.http.routers.backend-api.service=backend-api
+      - traefik.http.services.backend-api.loadbalancer.server.port=8000
+      - traefik.docker.network=task03_stage03_private
   redis:
     image: redis:7.4-alpine
     command: ["redis-server", "--appendonly", "yes"]

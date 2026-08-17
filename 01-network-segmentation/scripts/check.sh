@@ -4,6 +4,24 @@
 
 set -eu
 
+wait_for_traefik_docker_routes() {
+  attempt=0
+  while [ "$attempt" -lt 30 ]; do
+    if curl -fsS http://localhost:8081/api/http/routers 2>/dev/null | grep -q '"backend-api@docker"' \
+      && curl -fsS http://localhost:8081/api/http/routers 2>/dev/null | grep -q '"frontend@docker"'; then
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+
+  echo "Traefik did not load the expected Docker-discovered routers." >&2
+  curl -fsS http://localhost:8081/api/http/routers || true
+  exit 1
+}
+
+wait_for_traefik_docker_routes
+
 echo "Checking front-end through Traefik..."
 curl -fsS -H "Host: app.localhost" http://localhost:8080/ | grep -q "Production-like Compose Lab"
 
@@ -48,5 +66,9 @@ fi
 
 echo "Checking that MySQL is reachable from inside the private network..."
 docker compose exec -T mysql mysql -uappuser -papppass appdb -e "SELECT COUNT(*) AS products FROM products;"
+
+echo "Checking Traefik Docker discovery..."
+curl -fsS http://localhost:8081/api/http/routers | grep -q '"backend-api@docker"'
+curl -fsS http://localhost:8081/api/http/routers | grep -q '"frontend@docker"'
 
 echo "Stage 01 checks passed."

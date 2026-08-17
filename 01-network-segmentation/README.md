@@ -27,6 +27,8 @@ flowchart LR
   traefik --> front
   traefik --> api
   api --> mysql
+  dockerproxy[Docker API proxy<br/>Docker labels]
+  traefik -. "Docker provider" .-> dockerproxy
 ```
 
 ## What this proves
@@ -48,6 +50,13 @@ Run the automated check:
 ```bash
 ./scripts/check.sh
 ```
+Traefik discovery proof:
+
+```bash
+curl http://localhost:8081/api/http/routers | grep '@docker'
+docker compose exec traefik wget -q -O - http://docker-api-proxy:2375/v1.24/version
+```
+
 
 Manual proof commands:
 
@@ -90,4 +99,4 @@ Stage 02 keeps the network isolation and adds Redis on the private network so re
 docker compose down -v
 ```
 
-`-v` removes the teaching database volume so the next run starts clean.
+`-v` removes the database volume so the next run starts clean.

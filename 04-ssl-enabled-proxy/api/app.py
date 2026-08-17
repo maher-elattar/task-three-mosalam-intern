@@ -25,7 +25,7 @@ REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 CACHE_ENABLED = os.getenv("CACHE_ENABLED", "false").lower() == "true"
 CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "30"))
-API_KEY = os.getenv("API_KEY", "intern-secret-key")
+API_KEY = os.getenv("API_KEY", "lab-secret-key")
 BLOCKED_IPS = {
     ip.strip()
     for ip in os.getenv("BLOCKED_IPS", "").split(",")
@@ -35,12 +35,12 @@ BLOCKED_IPS = {
 
 # Structured stdout logs are easy for Promtail/Loki to parse and search.
 logging.basicConfig(level=logging.INFO, format="%(message)s")
-logger = logging.getLogger("teaching-api")
+logger = logging.getLogger("sample-api")
 
 
 REQUESTS = Counter(
     "http_requests_total",
-    "Total HTTP requests served by the teaching API.",
+    "Total HTTP requests served by the sample API.",
     ["method", "endpoint", "status"],
 )
 REQUEST_LATENCY = Histogram(

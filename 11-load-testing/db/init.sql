@@ -1,4 +1,4 @@
--- Seed data for the teaching API.
+-- Seed data for the sample API.
 -- MySQL runs this file only when the database volume is created for the first time.
 
 CREATE TABLE IF NOT EXISTS products (

@@ -36,6 +36,8 @@ flowchart LR
   api1 -. logs .-> promtail
   api2 -. logs .-> promtail
   backup -. logs .-> promtail
+  dockerproxy[Docker API proxy<br/>Docker labels]
+  traefik -. "Docker provider" .-> dockerproxy
 ```
 
 ## What this proves
@@ -58,6 +60,13 @@ Run the automated check:
 ```bash
 ./scripts/check.sh
 ```
+Traefik discovery proof:
+
+```bash
+curl http://localhost:8081/api/http/routers | grep '@docker'
+docker compose exec traefik wget -q -O - http://docker-api-proxy:2375/v1.24/version
+```
+
 
 Manual backup proof:
 
@@ -76,7 +85,7 @@ docker volume inspect task03_stage07_backups_mysql_data
 Manual logging proof:
 
 ```bash
-curl -k -H 'Host: api.localhost' -H 'X-API-Key: intern-secret-key' https://localhost:8443/api/items
+curl -k -H 'Host: api.localhost' -H 'X-API-Key: lab-secret-key' https://localhost:8443/api/items
 curl -G http://localhost:3100/loki/api/v1/series \
   --data-urlencode 'match[]={project="task03_stage07_backups"}'
 ```

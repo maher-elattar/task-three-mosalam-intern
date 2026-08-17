@@ -3,8 +3,26 @@
 
 set -eu
 
+wait_for_traefik_docker_routes() {
+  attempt=0
+  while [ "$attempt" -lt 30 ]; do
+    if curl -fsS http://localhost:8081/api/http/routers 2>/dev/null | grep -q '"backend-api@docker"' \
+      && curl -fsS http://localhost:8081/api/http/routers 2>/dev/null | grep -q '"frontend@docker"'; then
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+
+  echo "Traefik did not load the expected Docker-discovered routers." >&2
+  curl -fsS http://localhost:8081/api/http/routers || true
+  exit 1
+}
+
+wait_for_traefik_docker_routes
+
 echo "Generating API logs..."
-curl -kfsS -H "Host: api.localhost" -H "X-API-Key: intern-secret-key" https://localhost:8443/api/items >/dev/null
+curl -kfsS -H "Host: api.localhost" -H "X-API-Key: lab-secret-key" https://localhost:8443/api/items >/dev/null
 
 echo "Checking that the backup worker created a timestamped dump..."
 docker compose exec -T backup sh -lc 'latest="$(ls -1 /backups/appdb-*.sql | tail -1)"; echo "$latest"; test -s "$latest"; grep -q "CREATE TABLE" "$latest"; grep -q "products" "$latest"'
@@ -57,5 +75,9 @@ curl -fsS -G http://localhost:3100/loki/api/v1/series \
 
 echo "Checking ACME overlay renders valid Compose config..."
 docker compose -f compose.yml -f compose.acme.yml config -q
+
+echo "Checking Traefik Docker discovery..."
+curl -fsS http://localhost:8081/api/http/routers | grep -q '"backend-api@docker"'
+curl -fsS http://localhost:8081/api/http/routers | grep -q '"frontend@docker"'
 
 echo "Stage 09 checks passed."

@@ -1,5 +1,5 @@
 # Alert rules for the production-like lab.
-# Some thresholds are intentionally low so interns can trigger alerts during a lecture.
+# Some thresholds are intentionally low so alerts can be triggered during local testing.
 
 groups:
   - name: production_like_lab

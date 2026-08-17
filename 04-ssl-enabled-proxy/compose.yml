@@ -7,23 +7,25 @@ name: task03_stage04_ssl
 
 services:
   traefik:
-    image: traefik:v3.1
+    image: traefik:v3.5
     command:
-      - "--providers.file.directory=/etc/traefik/dynamic"
-      - "--providers.file.watch=true"
-      - "--entrypoints.web.address=:80"
-      - "--entrypoints.websecure.address=:443"
-      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
-      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
-      # ACME resolver is configured here. Routers use it only when compose.acme.yml is added.
-      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-ops@example.com}"
-      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
-      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
-      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
-      - "--api.dashboard=true"
-      - "--api.insecure=true"
-      - "--log.level=INFO"
-      - "--accesslog=true"
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.endpoint=tcp://docker-api-proxy:2375
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-ops@example.com}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      - --api.dashboard=true
+      - --api.insecure=true
+      - --log.level=INFO
+      - --accesslog=true
     ports:
       - "8080:80"
       - "8443:443"
@@ -36,6 +38,21 @@ services:
       - public
       - private
 
+    depends_on:
+      docker-api-proxy:
+        condition: service_started
+      front:
+        condition: service_started
+      api:
+        condition: service_healthy
+  docker-api-proxy:
+    image: haproxy:2.9-alpine
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./docker-api-proxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      - private
+    user: 0:0
   front:
     build:
       context: ./front
@@ -43,6 +60,13 @@ services:
     networks:
       - public
 
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.frontend.rule=Host(`app.localhost`)
+      - traefik.http.routers.frontend.entrypoints=websecure
+      - traefik.http.routers.frontend.tls=true
+      - traefik.http.services.frontend.loadbalancer.server.port=80
+      - traefik.docker.network=task03_stage04_public
   api:
     build:
       context: ./api
@@ -71,6 +95,14 @@ services:
     networks:
       - private
 
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.backend-api.rule=Host(`api.localhost`)
+      - traefik.http.routers.backend-api.entrypoints=websecure
+      - traefik.http.routers.backend-api.service=backend-api
+      - traefik.http.routers.backend-api.tls=true
+      - traefik.http.services.backend-api.loadbalancer.server.port=8000
+      - traefik.docker.network=task03_stage04_private
   redis:
     image: redis:7.4-alpine
     command: ["redis-server", "--appendonly", "yes"]

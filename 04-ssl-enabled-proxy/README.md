@@ -11,7 +11,7 @@ Local laptop mode:
 Production domain mode:
 
 - Traefik has an ACME resolver named `letsencrypt`.
-- `compose.acme.yml` mounts the ACME route file over the local route file.
+- `compose.acme.yml` adds Docker labels that attach the `letsencrypt` resolver to the HTTPS routers.
 - ACME state is stored in the `letsencrypt` volume, which lets Traefik renew certificates automatically.
 
 ## Current architecture
@@ -42,6 +42,8 @@ flowchart LR
   api2 --> redis
   api1 --> mysql
   api2 --> mysql
+  dockerproxy[Docker API proxy<br/>Docker labels]
+  traefik -. "Docker provider" .-> dockerproxy
 ```
 
 ## What this proves
@@ -64,6 +66,13 @@ Run the automated check:
 ```bash
 ./scripts/check.sh
 ```
+Traefik discovery proof:
+
+```bash
+curl http://localhost:8081/api/http/routers | grep '@docker'
+docker compose exec traefik wget -q -O - http://docker-api-proxy:2375/v1.24/version
+```
+
 
 Manual TLS proof:
 
@@ -86,7 +95,7 @@ docker compose -f compose.yml -f compose.acme.yml config -q
 
 ## Production ACME example
 
-Set real DNS first. Edit `traefik/dynamic/routes.acme.yml` so the `Host(...)` rules use your real front-end and API domains. Then run:
+Set real DNS first. Edit the `Host(...)` values in the `front` and `api` Traefik labels in `compose.yml`, then run:
 
 ```bash
 export ACME_EMAIL=ops@example.com

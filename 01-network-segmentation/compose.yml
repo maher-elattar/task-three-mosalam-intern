@@ -7,28 +7,39 @@ name: task03_stage01_network
 
 services:
   traefik:
-    image: traefik:v3.1
+    image: traefik:v3.5
     command:
-      # The file provider keeps routes explicit and easy to inspect during the lab.
-      # HTTP entrypoint for local lab access.
-      - "--entrypoints.web.address=:80"
-      - "--providers.file.directory=/etc/traefik/dynamic"
-      - "--providers.file.watch=true"
-      # Local dashboard. This is convenient for the lecture; protect it in real environments.
-      - "--api.dashboard=true"
-      - "--api.insecure=true"
-      - "--log.level=INFO"
-      - "--accesslog=true"
+      # Docker provider reads routing labels from the Compose services.
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.endpoint=tcp://docker-api-proxy:2375
+      - --entrypoints.web.address=:80
+      - --api.dashboard=true
+      - --api.insecure=true
+      - --log.level=INFO
+      - --accesslog=true
     ports:
       - "8080:80"
       - "8081:8080"
-    volumes:
-      # Dynamic routing rules are mounted read-only into Traefik.
-      - ./traefik/dynamic:/etc/traefik/dynamic:ro
     networks:
       - public
       - private
 
+    depends_on:
+      docker-api-proxy:
+        condition: service_started
+      front:
+        condition: service_started
+      api:
+        condition: service_healthy
+  docker-api-proxy:
+    image: haproxy:2.9-alpine
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./docker-api-proxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      - private
+    user: 0:0
   front:
     build:
       context: ./front
@@ -37,6 +48,12 @@ services:
       # The front-end is public-facing but still reached through Traefik.
       - public
 
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.frontend.rule=Host(`app.localhost`)
+      - traefik.http.routers.frontend.entrypoints=web
+      - traefik.http.services.frontend.loadbalancer.server.port=80
+      - traefik.docker.network=task03_stage01_public
   api:
     build:
       context: ./api
@@ -61,6 +78,13 @@ services:
       # The API has no host port and no public network membership.
       - private
 
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.backend-api.rule=Host(`api.localhost`)
+      - traefik.http.routers.backend-api.entrypoints=web
+      - traefik.http.routers.backend-api.service=backend-api
+      - traefik.http.services.backend-api.loadbalancer.server.port=8000
+      - traefik.docker.network=task03_stage01_private
   mysql:
     image: mysql:8.4
     environment:

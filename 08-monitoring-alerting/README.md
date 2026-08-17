@@ -57,6 +57,8 @@ flowchart LR
   prom --> cadvisor
   prom --> node
   prom --> blackbox
+  dockerproxy[Docker API proxy<br/>Docker labels]
+  traefik -. "Docker provider" .-> dockerproxy
 ```
 
 ## What this proves
@@ -80,6 +82,13 @@ Run the automated check:
 ```bash
 ./scripts/check.sh
 ```
+Traefik discovery proof:
+
+```bash
+curl http://localhost:8081/api/http/routers | grep '@docker'
+docker compose exec traefik wget -q -O - http://docker-api-proxy:2375/v1.24/version
+```
+
 
 Manual monitoring proof:
 
@@ -105,7 +114,7 @@ Trigger the API latency alert:
 ```bash
 for i in $(seq 1 40); do
   curl -k -H 'Host: api.localhost' \
-    -H 'X-API-Key: intern-secret-key' \
+    -H 'X-API-Key: lab-secret-key' \
     'https://localhost:8443/api/slow?delay_ms=900'
 done
 ```

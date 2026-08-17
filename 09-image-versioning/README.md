@@ -9,7 +9,7 @@ Components:
 - `db:v2` is built from `db/Dockerfile` and includes the seed SQL.
 - Third-party images keep pinned upstream tags such as `traefik:v3.1`, `redis:7.4-alpine`, and `prom/prometheus:v2.54.1`.
 
-Versioning rule for interns:
+Versioning rule:
 
 - Any application or schema change must create a new immutable tag.
 - Example: change the API, then move from `api:v2` to `api:v3`.
@@ -38,6 +38,8 @@ flowchart LR
   prom --> mysql
   grafana[Grafana] --> prom
   grafana --> loki[(Loki)]
+  dockerproxy[Docker API proxy<br/>Docker labels]
+  traefik -. "Docker provider" .-> dockerproxy
 ```
 
 ## What this proves
@@ -60,6 +62,13 @@ Run the automated check:
 ```bash
 ./scripts/check.sh
 ```
+Traefik discovery proof:
+
+```bash
+curl http://localhost:8081/api/http/routers | grep '@docker'
+docker compose exec traefik wget -q -O - http://docker-api-proxy:2375/v1.24/version
+```
+
 
 Manual image proof:
 
@@ -89,7 +98,7 @@ Trigger the API latency alert:
 ```bash
 for i in $(seq 1 40); do
   curl -k -H 'Host: api.localhost' \
-    -H 'X-API-Key: intern-secret-key' \
+    -H 'X-API-Key: lab-secret-key' \
     'https://localhost:8443/api/slow?delay_ms=900'
 done
 ```
@@ -110,10 +119,11 @@ flowchart LR
   backup[Backup worker] --> dbproxy
   exporter[MySQL exporter] --> dbproxy
   dbproxy --> primary[(mysql-primary)]
-  dbproxy -. failover .-> standby[(mysql-standby)]
+  primary -. "binlog replication" .-> standby[(mysql-standby)]
+  dbproxy -. failover .-> standby
 ```
 
-Stage 10 keeps image versioning and adds a simple HAProxy database failover path.
+Stage 10 keeps image versioning and adds a replicated HAProxy database failover path.
 
 ## Stop
 
